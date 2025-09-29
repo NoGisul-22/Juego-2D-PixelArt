@@ -81,8 +81,8 @@ class Player:
         self.vel_y = 0.0
 
         # físicas
-        self.speed = 520.0
-        self.jump_impulse = 780.0
+        self.speed = 250.0
+        self.jump_impulse = 770.0
         self.gravity = 2200.0
 
         self.on_ground = False
@@ -287,6 +287,14 @@ class Enemy:
             self.rect.centerx += vel.x
             self.rect.centery += vel.y
 
+    def reset(self):
+        self.rect.center = self.path[0] if self.path else self.rect.center
+        self.path_idx = 0
+        self.forward = True
+        self.dead = False
+        self.hp = 1
+        self.frame_idx = 0.0
+
     def draw(self, surf, camera):
         if self.dead: return
         screen_pos = (self.rect.x - camera.rect.x, self.rect.y - camera.rect.y)
@@ -455,8 +463,7 @@ class Game:
 
                 # si el objeto tiene polyline
                 if hasattr(obj, "points") and obj.points:
-                    pts = [(obj.x + px, obj.y + py) for (px, py) in obj.points]
-                    e.path = pts
+                    e.path = [(px, py) for (px, py) in obj.points]
                 else:
                     # propiedad 'route' tipo "x1,y1;x2,y2"
                     route_prop = getattr(obj, "properties", {}).get("route")
@@ -593,9 +600,20 @@ class Game:
                     e.hp -= 1
                     e.dead = (e.hp <= 0)
 
+        for e in self.enemies:
+            if not e.dead and self.player.rect.colliderect(e.rect):
+                # si el jugador colisiona con un enemigo vivo, reiniciar
+                self.player.reset()
+                #reiniciar enemigos tambien
+                for en in self.enemies:
+                    en.reset()
+                break # no necesitamos chequear más
+
         # reinicio si cae
         if self.player.rect.top > self.world_h + 200:
             self.player.reset()
+            for e in self.enemies:
+                e.reset()
 
         # cámara
         self.camera.update(self.player.rect)
