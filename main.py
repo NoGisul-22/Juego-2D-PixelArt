@@ -1,237 +1,667 @@
-import pygame, sys, pytmx
+# main.py
+import pygame, sys, pytmx, math
+from pathlib import Path
 
-# Inicializando pygame y el mixer para audio
+# -----------------------
+# Configuración básica
+# -----------------------
 pygame.mixer.pre_init(44100, -16, 2, 512)
-pygame.mixer.init()
 pygame.init()
-
-# configuraciones de la pantalla
+pygame.mixer.init()
 WIDTH, HEIGHT = 1024, 768
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Prueba")
-
-# Clock para manejar FPS
+pygame.display.set_caption("Juego - MUNDO 1-1")
 clock = pygame.time.Clock()
+FONT = pygame.font.SysFont("dejavusans", 20)
 
-# Estado del juego
-in_menu = True
+ASSET_DIR = Path("assets")
+MEDIA_DIR = Path("media")
 
-# cargar assets
-fondo_menu = pygame.image.load("assets/prueba_fondo.png").convert()
-personaje = pygame.image.load("assets/borrador_robot.png").convert_alpha()
-pygame.mixer.music.load("media/music/menu.mp3")
-sonido_salto = pygame.mixer.Sound("media/audio/salto.mp3")
-canal_movimiento = pygame.mixer.Channel(1)
-sonido_movimiento = pygame.mixer.Sound("media/audio/movimiento.mp3")
-sonido_movimiento.set_volume(0.4)
+# DEBUG visual (pon True para ver si on_ground se está calculando)
+DEBUG = False
 
-# Variables del personaje
-player_x, player_y = 100, 300
-player_rect = pygame.Rect(player_x, player_y, personaje.get_width(), personaje.get_height())
-vel_x, vel_y = 0, 0
-velocidad_movimiento = 3
-GRAVEDAD = 0.5
-en_suelo = False
-direccion = "derecha"
+# Helper de carga con fallback
+def load_image(path, convert_alpha=True):
+    try:
+        img = pygame.image.load(str(path))
+        return img.convert_alpha() if convert_alpha else img.convert()
+    except Exception as e:
+        print(f"Error cargando imagen: {path}, {e}")
+        w, h = (64, 64)
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        surf.fill((255, 0, 255, 128))
+        pygame.draw.line(surf, (0, 0, 0), (0, 0), (w, h), 3)
+        pygame.draw.line(surf, (0, 0, 0), (0, h), (w, 0), 3)
+        return surf
 
-# Cámara
-cam_x = 0
-zoom = 2  # Nivel de zoom (2 = 200%)
+def load_sound(path):
+    try:
+        return pygame.mixer.Sound(path)
+    except Exception:
+        return None
 
-# Carga de animaciones
+# -----------------------
+# Clases principales
+# -----------------------
+class Camera:
+    def __init__(self, world_w, world_h, screen_w, screen_h, zoom=1):
+        self.world_w = world_w
+        self.world_h = world_h
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self.zoom = zoom
+        cam_w = min(screen_w // zoom, max(1, world_w))
+        cam_h = min(screen_h // zoom, max(1, world_h))
+        self.rect = pygame.Rect(0, 0, cam_w, cam_h)
 
-frames_de_pie = [
-    pygame.image.load("assets/animations/idle/de_pie1.png").convert_alpha(),
-    pygame.image.load("assets/animations/idle/de_pie2.png").convert_alpha(),
-    pygame.image.load("assets/animations/idle/de_pie3.png").convert_alpha(),
-    pygame.image.load("assets/animations/idle/de_pie4.png").convert_alpha(),
-    ]
+    def update(self, target_rect):
+        # centrar en el jugador
+        self.rect.centerx = target_rect.centerx
+        self.rect.centery = target_rect.centery
 
-frames_correr = [
-    pygame.image.load("assets/animations/running/corriendo1.png").convert_alpha(),
-    pygame.image.load("assets/animations/running/corriendo2.png").convert_alpha(),
-    pygame.image.load("assets/animations/running/corriendo3.png").convert_alpha(),
-    pygame.image.load("assets/animations/running/corriendo4.png").convert_alpha(),
-    pygame.image.load("assets/animations/running/corriendo5.png").convert_alpha(),
-]
+        # limitar para no salirse del mundo
+        self.rect.clamp_ip(pygame.Rect(0, 0, self.world_w, self.world_h))
 
-# Velocidad de animaciones 
 
-frame_index = 0
-frame_delay = 0.15  # Cuántos frames esperar antes de cambiar la imagen
+class Player:
+    def __init__(self, x, y):
+        # guardar spawn original
+        self.start_pos = (x, y)
 
-# Cargar mapa Tiled
+        # sprites (placeholders)
+        self.sprite_idle = load_image(ASSET_DIR/"borrador_robot.png")
+        self.sprite_attack = load_image(ASSET_DIR/"animations/attack/atk1.png")
 
-tmx_data = pytmx.util_pygame.load_pygame("assets/maps/mapa1.tmx")
+        self.image = self.sprite_idle
+        self.rect = self.image.get_rect(topleft=(x, y))
 
-tmx_width = tmx_data.width * tmx_data.tilewidth
-tmx_height = tmx_data.height * tmx_data.tileheight
-world_surface = pygame.Surface((tmx_width, tmx_height), pygame.SRCALPHA)
+        # posición como float para física suave
+        self.pos = pygame.Vector2(float(self.rect.x), float(self.rect.y))
+        self.vel_x = 0.0
+        self.vel_y = 0.0
 
-# Crear lista de rectángulos para colisiones
-collision_rects = []
-for x, y, gid in tmx_data.get_layer_by_name("layers_suelo"):
-    if gid != 0:
-        tile_rect = pygame.Rect(
-            x * tmx_data.tilewidth,
-            y * tmx_data.tileheight,
-            tmx_data.tilewidth,
-            tmx_data.tileheight,
-        )
-        collision_rects.append(tile_rect)
+        # físicas
+        self.speed = 520.0
+        self.jump_impulse = 780.0
+        self.gravity = 2200.0
 
-# Punto de inicio del jugador
+        self.on_ground = False
+        self.is_jumping = False   # 🔹 flag de si está en animación de salto
+        self.image = self.sprite_idle
+        self.rect = self.image.get_rect(topleft=(x, y))
+        self.direction = 1  # 1 derecha, -1 izquierda
 
-spawn_point = None
-for obj in tmx_data.objects:
-    if obj.name == "player":
-        spawn_point = (obj.x, obj.y)
-        break
+        # animaciones
+        self.frames_idle = [
+            load_image(ASSET_DIR/"animations/idle/de_pie1.png"),
+            load_image(ASSET_DIR/"animations/idle/de_pie2.png"),
+        ]
+        self.frames_run = [
+            load_image(ASSET_DIR/"animations/running/corriendo1.png"),
+            load_image(ASSET_DIR/"animations/running/corriendo2.png"),
+        ]
+        self.frames_jump = [
+            load_image(ASSET_DIR/"animations/jump/jump1.png"),
+            load_image(ASSET_DIR/"animations/jump/jump2.png"),
+            load_image(ASSET_DIR/"animations/jump/jump3.png"),
+            load_image(ASSET_DIR/"animations/jump/jump4.png"),
+        ]
 
-if spawn_point:
-    player_x, player_y = spawn_point
-    player_rect.topleft = (player_x, player_y)
+        self.frame_idx = 0.0
+        self.frame_speed = 8.0
 
-pygame.mixer.music.play(-1) # Reproducir música en bucle
+        # ataque
+        self.attack_cooldown = 0.35
+        self.attack_timer = 0.0
 
-while True: 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            pygame.quit()
-            sys.exit()
-    
-    keys = pygame.key.get_pressed()
+    def update(self, dt, keys, collision_rects):
+        dt_s = dt / 1000.0
+        ax = (1 if keys[pygame.K_RIGHT] else 0) - (1 if keys[pygame.K_LEFT] else 0)
+        self.vel_x = ax * self.speed
+        if ax != 0:
+            self.direction = 1 if ax > 0 else -1
 
-    if in_menu:
-        screen.blit(fondo_menu, (0, 0))
-        if keys[pygame.K_RETURN]:
-            in_menu = False
-            pygame.mixer.music.stop()
-            #pygame.mixer.music.load("media/music/tema1.mp3")
-            #pygame.mixer.music.play(-1)
-    else:
-        # Movimiento horizontal del jugador
-        vel_x = keys[pygame.K_RIGHT] - keys[pygame.K_LEFT]
-        player_x += vel_x * velocidad_movimiento
-        player_rect.x = player_x
+        # salto (activar animación aquí SOLO cuando empieza)
+        if keys[pygame.K_SPACE] and self.on_ground:
+            self.vel_y = -self.jump_impulse
+            self.on_ground = False
+            self.is_jumping = True   # 🔹 ahora sí marcamos que está en salto
+            self.frame_idx = 0.0     # reiniciar anim de salto
+            if hasattr(self, 'sound_jump') and self.sound_jump:
+                self.sound_jump.play()
 
-        if vel_x != 0 and en_suelo:
-            if not canal_movimiento.get_busy():
-                canal_movimiento.play(sonido_movimiento, loops=-1)  
+        #  gravedad
+        self.vel_y += self.gravity * dt_s
+
+        # movimiento X
+        self.pos.x += self.vel_x * dt_s
+        self.rect.x = int(self.pos.x)
+        self._collide_axis(collision_rects, axis="x")
+
+        # movimiento Y
+        prev_bottom = self.rect.bottom
+        self.pos.y += self.vel_y * dt_s
+        self.rect.y = int(self.pos.y)
+        self.on_ground = False
+        self._collide_axis(collision_rects, axis="y", prev_bottom=prev_bottom)
+
+        # 🔹 si aterrizó, se cancela animación de salto
+        if self.on_ground and self.is_jumping:
+            self.is_jumping = False
+
+        # ---------------------
+        # Animaciones
+        # ---------------------
+        if self.is_jumping:
+            # animación de salto (frames 0-2 al inicio, frame 3 en el aire)
+            if self.frame_idx < len(self.frames_jump) - 1:
+                self.frame_idx += self.frame_speed * dt_s
+                idx = min(int(self.frame_idx), len(self.frames_jump)-2)  # 0..2
+            else:
+                idx = len(self.frames_jump) - 1  # último frame fijo
+            self.image = self.frames_jump[idx]
+
+        elif self.vel_x != 0 and self.on_ground:
+            self.frame_idx += self.frame_speed * dt_s
+            frames = self.frames_run if self.frames_run else [self.sprite_idle]
+            self.image = frames[int(self.frame_idx) % len(frames)]
+
         else:
-            canal_movimiento.stop()
+            self.frame_idx += self.frame_speed * dt_s
+            frames = self.frames_idle if self.frames_idle else [self.sprite_idle]
+            self.image = frames[int(self.frame_idx) % len(frames)]
 
-        # --- Colisiones en eje X ---
-        for tile in collision_rects:
-            if player_rect.colliderect(tile):
-                if vel_x > 0:  # moviéndose a la derecha
-                    player_rect.right = tile.left
-                    player_x = player_rect.x
-                elif vel_x < 0:  # moviéndose a la izquierda
-                    player_rect.left = tile.right
-                    player_x = player_rect.x
+        # dirección
+        if self.direction == -1:
+            self.image = pygame.transform.flip(self.image, True, False)
 
-        # Movimiento vertical del jugador
-        vel_y += GRAVEDAD
-        player_y += vel_y
-        player_rect.y = player_y
-        en_suelo = False
+        # cooldown ataque
+        if self.attack_timer > 0.0:
+            self.attack_timer = max(0.0, self.attack_timer - dt_s)
 
+    def _collide_axis(self, rects, axis, prev_bottom=None):
+        """
+        rects: lista de pygame.Rect (colisiones)
+        axis: "x" o "y"
+        prev_bottom: bottom del rect antes del movimiento vertical (int) - se usa para detectar aterrizajes
+        """
+        for r in rects:
+            if self.rect.colliderect(r):
+                if axis == "x":
+                    if self.vel_x > 0:
+                        self.rect.right = r.left
+                    elif self.vel_x < 0:
+                        self.rect.left = r.right
+                    # sincronizar pos con rect para evitar drift
+                    self.pos.x = float(self.rect.x)
+                    self.vel_x = 0.0
+                else:  # eje y
+                    # 1) Si venimos desde arriba (prev_bottom <= r.top) -> aterrizaje
+                    landed = False
+                    if prev_bottom is not None and prev_bottom <= r.top:
+                        landed = True
+                    # 2) si la velocidad vertical es positiva (estamos cayendo) -> también aterrizamos
+                    if self.vel_y > 0 or landed:
+                        # colocar al jugador encima de la plataforma
+                        self.rect.bottom = r.top
+                        self.on_ground = True
+                        self.pos.y = float(self.rect.y)
+                        self.vel_y = 0.0
+                    elif self.vel_y < 0:
+                        # golpeo la cabeza por debajo
+                        self.rect.top = r.bottom
+                        self.pos.y = float(self.rect.y)
+                        self.vel_y = 0.0
+                    else:
+                        # caso extremo: vel_y == 0 y prev_bottom > r.top (ya estaba dentro)
+                        # hacemos una corrección defensiva (p. ej. si queda superpuesto por 1-2px)
+                        if self.rect.bottom > r.top and self.rect.top < r.top:
+                            # empujar hacia arriba y marcar como on_ground
+                            self.rect.bottom = r.top
+                            self.on_ground = True
+                            self.pos.y = float(self.rect.y)
+                            self.vel_y = 0.0
 
-        # --- Colisiones en eje Y ---
-        for tile in collision_rects:
-            if player_rect.colliderect(tile):
-                if vel_y > 0:  # cayendo
-                    player_rect.bottom = tile.top
-                    player_y = player_rect.y
-                    vel_y = 0
-                    en_suelo = True
-                elif vel_y < 0:  # golpeando desde abajo
-                    player_rect.top = tile.bottom
-                    player_y = player_rect.y
-                    vel_y = 0
+    def attack_ready(self):
+        return self.attack_timer <= 0.0
 
-        # Detección de a donde mira el personaje
-        if vel_x > 0:
-            direccion = "derecha"
-        elif vel_x < 0:
-            direccion = "izquierda"
+    def do_attack(self):
+        self.attack_timer = self.attack_cooldown
 
-        # Reiniciar al caer fuera de la pantalla
-        if player_y > HEIGHT:
-            player_x, player_y = spawn_point
-            player_rect.topleft = (player_x, player_y)
-            vel_x, vel_y = 0, 0
-            pygame.mixer.music.rewind() # Reiniciar música
+    def reset(self):
+        """Reinicia al jugador en la posición inicial"""
+        self.rect.topleft = self.start_pos
+        self.pos = pygame.Vector2(float(self.rect.x), float(self.rect.y))
+        self.vel_x = 0.0
+        self.vel_y = 0.0
+        self.on_ground = False
+        self.attack_timer = 0.0
+        self.frame_idx = 0.0
 
-        # Saltar
-        if keys[pygame.K_SPACE] and en_suelo:
-            vel_y = -15
-            vel_x *= 0.5  # Reducir velocidad horizontal al saltar
-            sonido_salto.play()
+class Enemy:
+    def __init__(self, x, y, w=32, h=32, speed=100, frames=None):
+        self.frames = frames or []
+        self.frame_idx = 0.0
+        self.frame_speed = 6.0  # frames por segundo
+        self.image = self.frames[0] if self.frames else load_image(ASSET_DIR/"enemy_placeholder.png")
 
-        # camara centrada en el jugador
-        cam_x = player_rect.centerx - WIDTH // 2
-        cam_y = player_rect.centery - HEIGHT // 2
+        # usar centro para que las rutas funcionen correctamente
+        self.rect = self.image.get_rect(center=(x, y))
+        self.speed = speed  # pixels/segundo
+        self.path = []      # lista de puntos [(x,y), ...]
+        self.path_idx = 0
+        self.forward = True
+        self.hp = 1
+        self.dead = False
 
-        #Limitar cámara a los bordes del mapa
-        cam_x = max(0, min(cam_x, tmx_width - WIDTH))
-        cam_y = max(0, min(cam_y, tmx_height - HEIGHT))
+    def update(self, dt):
+        if self.dead: return
 
-        # --------------------------
-        # Manejo de animaciones
-        # --------------------------
-        if vel_x != 0:
-            frame_index += frame_delay
-            if frame_index >= len(frames_correr):
-                frame_index = 0
-            frame_actual = frames_correr[int(frame_index)]
+        # Animación
+        if self.frames:
+            self.frame_idx += self.frame_speed * (dt / 1000.0)
+            self.image = self.frames[int(self.frame_idx) % len(self.frames)]
+
+        # Movimiento por ruta
+        if not self.path: return
+
+        target = pygame.Vector2(self.path[self.path_idx])
+        pos = pygame.Vector2(self.rect.center)
+        dir_vec = target - pos
+        dist = dir_vec.length()
+
+        if dist < 2:
+            # cambiar de punto
+            if self.forward:
+                self.path_idx += 1
+                if self.path_idx >= len(self.path):
+                    self.path_idx = max(0, len(self.path)-1)
+                    self.forward = False
+            else:
+                self.path_idx -= 1
+                if self.path_idx < 0:
+                    self.path_idx = 0
+                    self.forward = True
         else:
-            frame_index += frame_delay
-            if frame_index >= len(frames_de_pie):
-                frame_index = 0
-            frame_actual = frames_de_pie[int(frame_index)]
+            vel = dir_vec.normalize() * self.speed * (dt / 1000.0)
+            self.rect.centerx += vel.x
+            self.rect.centery += vel.y
 
-        # Voltear imagen si mira a la izquierda
-        if direccion == "izquierda":
-            frame_actual = pygame.transform.flip(frame_actual, True, False)
+    def draw(self, surf, camera):
+        if self.dead: return
+        screen_pos = (self.rect.x - camera.rect.x, self.rect.y - camera.rect.y)
+        surf.blit(self.image, screen_pos)
 
-        # --------------------------
-        # Dibujar Mapa
-        # --------------------------
-        screen.fill((0, 0, 0))  # Fondo negro antes de pintar
-        world_surface.fill((0, 0, 0, 0))
-        for layer in tmx_data.visible_layers:
+class Dron(Enemy):
+    def __init__(self, x, y):
+        frames = [
+            load_image(ASSET_DIR/"animations/enemies/dron/dron1.png"),
+            load_image(ASSET_DIR/"animations/enemies/dron/dron2.png"),
+            load_image(ASSET_DIR/"animations/enemies/dron/dron3.png"),
+            load_image(ASSET_DIR/"animations/enemies/dron/dron4.png"),
+            load_image(ASSET_DIR/"animations/enemies/dron/dron5.png"),
+            load_image(ASSET_DIR/"animations/enemies/dron/dron6.png"),
+            load_image(ASSET_DIR/"animations/enemies/dron/dron7.png"),
+        ]
+        super().__init__(x, y, w=48, h=24, speed=180, frames=frames)  # velocidad pixels/sec
+
+class Slime(Enemy):
+    def __init__(self, x, y):
+        frames = [
+            load_image(ASSET_DIR/"animations/enemies/slime/slime1.png"),
+            load_image(ASSET_DIR/"animations/enemies/slime/slime2.png"),
+            load_image(ASSET_DIR/"animations/enemies/slime/slime3.png"),
+            load_image(ASSET_DIR/"animations/enemies/slime/slime4.png"),
+            load_image(ASSET_DIR/"animations/enemies/slime/slime5.png"),
+        ]
+        super().__init__(x, y, w=32, h=24, speed=120, frames=frames)
+
+def is_on_ground(player, collision_rects):
+    """Devuelve True si hay suelo justo debajo del jugador"""
+    test_rect = player.rect.move(0, 2)  # desplazamos 2px hacia abajo
+    for r in collision_rects:
+        if test_rect.colliderect(r):
+            return True
+    return False
+
+
+# -----------------------
+# Motor del juego
+# -----------------------
+class Game:
+    def __init__(self, map_path):
+        # estados
+        self.state = "menu"  # "menu" o "playing"
+        # cargar mapa Tiled
+        self.tmx = pytmx.util_pygame.load_pygame(map_path)
+        self.world_w = self.tmx.width * self.tmx.tilewidth
+        self.world_h = self.tmx.height * self.tmx.tileheight
+        self.world_surf = pygame.Surface((self.world_w, self.world_h)).convert_alpha()
+        self.collision_rects = self._load_collision_rects()
+        # spawn
+        sp = self._find_object_by_name("player")
+        sx, sy = (sp.x, sp.y) if sp else (100, 100)
+        self.player = Player(sx, sy)
+        self.player.sound_jump = load_sound(MEDIA_DIR/"audio"/"salto.mp3")
+        # camara
+        self.camera = Camera(self.world_w, self.world_h, WIDTH, HEIGHT, zoom=1)
+        # cargar enemigos desde objetos
+        self.enemies = []
+        self._load_enemies_from_tiled()
+        # hud / mundo
+        self.world_name = "MUNDO 1-1"
+        self.world_completed = False
+
+        # assets UI/menu
+        self.menu_bg = load_image(ASSET_DIR/"prueba_fondo.png", convert_alpha=False)
+        self.bg_image = load_image(ASSET_DIR/"fondo_mapa1.jpeg", convert_alpha=False)
+        self.music_menu = self._load_music_safe(MEDIA_DIR/"music"/"menu.mp3")
+        self.sound_jump = load_sound(MEDIA_DIR/"audio"/"salto.mp3")
+        self.sound_move = load_sound(MEDIA_DIR/"audio"/"movimiento.mp3")
+        self.sound_move.set_volume(0.3) # Volumen más bajo para el movimiento
+        self.move_channel = pygame.mixer.Channel(1)
+        if self.music_menu:
+            pygame.mixer.music.load(str(self.music_menu))
+            pygame.mixer.music.play(-1)
+
+        # optimization: precompute tile surface? We'll draw visible tiles only.
+        self.tile_cache = None
+
+        # menu cursor
+        self.menu_options = ["INICIAR", "SALIR"]
+        self.menu_idx = 0
+
+    def _load_music_safe(self, p):
+        try:
+            return str(p)
+        except Exception:
+            return None
+
+    def _find_object_by_name(self, name):
+        for obj in self.tmx.objects:
+            if obj.name == name:
+                return obj
+        return None
+
+    def _load_collision_rects(self):
+        rects = []
+        # intentamos varias nombres usuales (español/inglés) y si no, tomamos la primera capa de tiles
+        layer = None
+        candidates = ["layers_suelo", "suelo", "collision", "colisiones",
+                  "Collision", "Capa de colisiones", "Capa de patrones 1", "capa de patrones 1"]
+        for c in candidates:
+            try:
+                layer = self.tmx.get_layer_by_name(c)
+                break
+            except Exception:
+                layer = None
+
+        if layer is None:
+            # fallback: primera capa de tiles visible
+            for lay in self.tmx.layers:
+                if isinstance(lay, pytmx.TiledTileLayer):
+                    layer = lay
+                    break
+
+        if layer:
+            tw = self.tmx.tilewidth
+            th = self.tmx.tileheight
+            # iterar por todos los tiles de esa capa
+            for x, y, gid in layer:
+                if gid:
+                    rects.append(pygame.Rect(x * tw, y * th, tw, th))
+        else:
+            # fallback final: buscar objetos tipo/nombre 'collision'
+            for obj in self.tmx.objects:
+                t = (obj.type or "").lower()
+                n = (obj.name or "").lower()
+                if t == "collision" or n == "collision":
+                    rects.append(pygame.Rect(obj.x, obj.y, obj.width, obj.height))
+
+        # DEBUG: imprime cuántos rects de colisión tenemos (puedes comentar)
+        if DEBUG:
+            print("Collision rects:", len(rects))
+
+        return rects
+
+    def _parse_route_prop(self, prop):
+        # acepta "x1,y1;x2,y2"
+        pts = []
+        if not prop: return pts
+        for seg in prop.split(";"):
+            try:
+                x, y = seg.split(",")
+                pts.append((float(x), float(y)))
+            except:
+                continue
+        return pts
+
+    def _load_enemies_from_tiled(self):
+        print("Objetos en TMX:")
+        for obj in self.tmx.objects:
+            print(f"Nombre: {obj.name}, Tipo: {obj.type}, X: {obj.x}, Y: {obj.y}, Puntos: {getattr(obj,'points',None)}")
+
+        for obj in self.tmx.objects:
+            name = (obj.name or "").lower()
+            typ = (obj.type or "").lower()
+
+            # determinar tipo de enemigo
+            if name in ("dron", "slime") or typ in ("dron", "slime"):
+                x, y = obj.x, obj.y
+                if name == "dron" or typ == "dron":
+                    e = Dron(x, y)
+                else:
+                    e = Slime(x, y)
+
+                # si el objeto tiene polyline
+                if hasattr(obj, "points") and obj.points:
+                    pts = [(obj.x + px, obj.y + py) for (px, py) in obj.points]
+                    e.path = pts
+                else:
+                    # propiedad 'route' tipo "x1,y1;x2,y2"
+                    route_prop = getattr(obj, "properties", {}).get("route")
+                    if route_prop:
+                        pts = []
+                        for seg in route_prop.split(";"):
+                            try:
+                                px, py = seg.split(",")
+                                pts.append((float(px), float(py)))
+                            except:
+                                continue
+                        e.path = pts
+                    else:
+                        # fallback: patrulla horizontal simple
+                        e.path = [(x, y), (x + 128, y)]
+
+                self.enemies.append(e)
+
+
+    def draw_map_region(self, surf, camera):
+        # dibuja solo tiles visibles dentro de camera.rect
+        tw, th = self.tmx.tilewidth, self.tmx.tileheight
+        left = max(0, camera.rect.x // tw - 1)
+        right = min(self.tmx.width, (camera.rect.right // tw) + 2)
+        top = max(0, camera.rect.y // th - 1)
+        bottom = min(self.tmx.height, (camera.rect.bottom // th) + 2)
+
+        for layer in self.tmx.visible_layers:
             if isinstance(layer, pytmx.TiledTileLayer):
-                for x, y, gid in layer:
-                    tile = tmx_data.get_tile_image_by_gid(gid)
-                    if tile:
-                        world_surface.blit(tile, (x * tmx_data.tilewidth, y * tmx_data.tileheight))
-            
+                for x in range(left, right):
+                    for y in range(top, bottom):
+                        gid = layer.data[y][x]
+                        if gid:
+                            tile = self.tmx.get_tile_image_by_gid(gid)
+                            if tile:
+                                sx = x*tw - camera.rect.x
+                                sy = y*th - camera.rect.y
+                                surf.blit(tile, (sx, sy))
             elif isinstance(layer, pytmx.TiledImageLayer):
                 if layer.image:
-                    x = getattr(layer, "offsetx", 0)
-                    y = getattr(layer, "offsety", 0)
-                    world_surface.blit(layer.image, (x,y))
-        
-        # Dibujar jugador en world_surface
-        world_surface.blit(frame_actual, (player_x - cam_x, player_y))
+                    sx = getattr(layer, "offsetx", 0) - camera.rect.x
+                    sy = getattr(layer, "offsety", 0) - camera.rect.y
+                    surf.blit(layer.image, (sx, sy))
 
-        # Dibujar rectangulo del jugador en pantalla (Hit-box)
+    def run(self):
+        running = True
+        while running:
+            dt = clock.tick(60)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if self.state == "menu":
+                        if event.key == pygame.K_UP:
+                            self.menu_idx = (self.menu_idx - 1) % len(self.menu_options)
+                        elif event.key == pygame.K_DOWN:
+                            self.menu_idx = (self.menu_idx + 1) % len(self.menu_options)
+                        elif event.key == pygame.K_RETURN:
+                            if self.menu_options[self.menu_idx] == "INICIAR":
+                                self.state = "playing"
+                                pygame.mixer.music.stop()
+                            elif self.menu_options[self.menu_idx] == "SALIR":
+                                running = False
+                    else:
+                        # atajos en juego
+                        if event.key == pygame.K_n:
+                            # marcar mundo completado (ejemplo)
+                            self.world_completed = True
+                        if event.key == pygame.K_ESCAPE:
+                            self.state = "menu"
+                            if self.music_menu:
+                                pygame.mixer.music.load(self.music_menu)
+                                pygame.mixer.music.play(-1)
 
-        # pygame.draw.rect(world_surface, (255, 0, 0), 
-        #         (player_x - cam_x, player_y, player_rect.width, player_rect.height), 2)
+            keys = pygame.key.get_pressed()
+            if self.state == "menu":
+                self.update_menu(keys)
+                self.render_menu()
+            else:
+                self.update_game(keys, dt)
+                self.render_game()
 
-        # Definir càmara (rect que sigue al jugador)
+            pygame.display.flip()
+        pygame.quit()
+        sys.exit()
 
-        cam_width = WIDTH // zoom
-        cam_height = HEIGHT // zoom 
-        cam_x = max(0, min(player_rect.centerx - cam_width // 2, tmx_width - cam_width))
-        cam_y = max(0, min(player_rect.centery - cam_height // 2, tmx_height - cam_height))
-        camera_rect = pygame.Rect(cam_x, cam_y, cam_width, cam_height)
+    def update_menu(self, keys):
+        # opcional: animaciones o música ya está corriendo
+        pass
 
-        # Recortar y escalar 
-        screen.blit(pygame.transform.scale(world_surface.subsurface(camera_rect), (WIDTH, HEIGHT)), (0, 0))
+    def render_menu(self):
+        screen.fill((0,0,0))
+        if self.menu_bg:
+            screen.blit(pygame.transform.scale(self.menu_bg, (WIDTH, HEIGHT)), (0,0))
+        # dibujar opciones
+        title_surf = FONT.render("MI JUEGO", True, (255,255,255))
+        screen.blit(title_surf, (WIDTH//2 - title_surf.get_width()//2, 80))
+        for i, opt in enumerate(self.menu_options):
+            col = (255,255,0) if i == self.menu_idx else (255,255,255)
+            txt = FONT.render(opt, True, col)
+            screen.blit(txt, (WIDTH//2 - txt.get_width()//2, 240 + i*40))
 
-    pygame.display.flip()
-    clock.tick(60)  # Limitar a 60 FPS
+    def update_game(self, keys, dt):
+        # actualizar jugador
+        self.player.update(dt, keys, self.collision_rects)
+
+        # sonido de movimiento en suelo (usando chequeo real bajo el jugador)
+        if abs(self.player.vel_x) > 0.1 and is_on_ground(self.player, self.collision_rects) and self.sound_move:
+            if not self.move_channel.get_busy():
+                self.move_channel.play(self.sound_move, loops=-1)
+        else:
+            if self.move_channel:
+                self.move_channel.stop()
+
+
+        # ataques
+        attack_rect = None
+        if keys[pygame.K_z] and self.player.attack_ready():
+            # crear rect delante del jugador
+            w = 60; h = self.player.rect.height//2
+            if self.player.direction == 1:
+                ax = self.player.rect.right
+            else:
+                ax = self.player.rect.left - w
+            ay = self.player.rect.centery - h//2
+            attack_rect = pygame.Rect(ax, ay, w, h)
+            self.player.do_attack()
+
+        # actualizar enemigos y chequear colisiones con ataque
+        for e in self.enemies:
+            e.update(dt)
+            if attack_rect and not e.dead:
+                if attack_rect.colliderect(e.rect):
+                    e.hp -= 1
+                    e.dead = (e.hp <= 0)
+
+        # reinicio si cae
+        if self.player.rect.top > self.world_h + 200:
+            self.player.reset()
+
+        # cámara
+        self.camera.update(self.player.rect)
+
+        # guardar el attack_rect para dibujar en render
+        self._attack_rect = attack_rect
+
+    def render_game(self):
+        # limpiar pantalla
+        if self.bg_image:
+            bg_x = -self.camera.rect.x * 0.5  # mueve la mitad de rápido
+            bg_y = -self.camera.rect.y * 0.5
+            screen.blit(pygame.transform.scale(self.bg_image, (WIDTH, HEIGHT)), (0,0))
+        else:
+            screen.fill((0,0,0))
+
+        # surface temporal del tamaño de la cámara
+        cam_surface = pygame.Surface((self.camera.rect.w, self.camera.rect.h)).convert_alpha()
+        cam_surface.fill((0,0,0,0))
+
+        # dibujar tiles visibles en relación a la cámara
+        self.draw_map_region(cam_surface, self.camera)
+
+        # dibujar enemigos
+        for e in self.enemies:
+            if not e.dead:
+                ex = e.rect.x - self.camera.rect.x
+                ey = e.rect.y - self.camera.rect.y
+                cam_surface.blit(e.image, (ex, ey))
+
+        # dibujar jugador
+        px = self.player.rect.x - self.camera.rect.x
+        py = self.player.rect.y - self.camera.rect.y
+        cam_surface.blit(self.player.image, (px, py))
+
+        # escalar la cámara a la pantalla final
+        screen.blit(pygame.transform.scale(cam_surface, (WIDTH, HEIGHT)), (0,0))
+
+        # HUD: nombre del mundo
+        txt = FONT.render(self.world_name + (" - COMPLETADO" if self.world_completed else ""), True, (255,255,255))
+        screen.blit(txt, (10,10))
+
+        # dibujar hitbox de ataque (relativa a la cámara)
+        if getattr(self, "_attack_rect", None):
+            ar = self._attack_rect
+            scr_rect = pygame.Rect(ar.x - self.camera.rect.x, ar.y - self.camera.rect.y, ar.w, ar.h)
+            pygame.draw.rect(screen, (255, 100, 0), scr_rect, 2)
+
+        # debug: dibujar colisiones
+        if DEBUG:
+            for r in self.collision_rects:
+                rr = pygame.Rect(r.x - self.camera.rect.x, r.y - self.camera.rect.y, r.w, r.h)
+                pygame.draw.rect(screen, (0,255,0), rr, 1)
+            # indicador on_ground
+            col = (0,255,0) if self.player.on_ground else (255,0,0)
+            pygame.draw.circle(screen, col, (30, 30), 8)
+
+# -----------------------
+# Ejecutar
+# -----------------------
+if __name__ == "__main__":
+    mapfile = ASSET_DIR/"maps"/"mundo1_mod.tmx"
+    if not mapfile.exists():
+        print("No se encontró el mapa:", mapfile)
+        print("Coloca tu TMX en assets/maps/mundo1.tmx o ajusta la ruta en main.py")
+        pygame.quit()
+        sys.exit()
+    game = Game(str(mapfile))
+    game.run()
