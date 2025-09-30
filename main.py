@@ -8,11 +8,12 @@ from pathlib import Path
 pygame.mixer.pre_init(44100, -16, 2, 512)
 pygame.init()
 pygame.mixer.init()
+pygame.mixer.music.set_volume(0.1)  # volumen música
 WIDTH, HEIGHT = 1024, 768
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Juego - MUNDO 1")
+pygame.display.set_caption("RUSTWALKER")
 clock = pygame.time.Clock()
-FONT = pygame.font.SysFont("dejavusans", 20)
+FONT = pygame.font.SysFont("dejavusans", 40)
 
 ASSET_DIR = Path("assets")
 MEDIA_DIR = Path("media")
@@ -153,7 +154,7 @@ class Player:
             self.is_jumping = True   # 🔹 ahora sí marcamos que está en salto
             self.frame_idx = 0.0     # reiniciar anim de salto
             if hasattr(self, 'sound_jump') and self.sound_jump:
-                self.sound_jump.play()
+                pygame.mixer.Sound.play(self.sound_jump)
 
 
         #  gravedad
@@ -290,8 +291,13 @@ class Laser:
         self.speed = speed          # px/s
         self.length = length        # longitud máxima del láser
         self.active = True
-        # Rect para colisión
-        self.rect = pygame.Rect(self.pos.x, self.pos.y - 4, 16, 8)  # ancho 16 px
+        # Rect para colisión (por si no se desea usar un sprite)
+        #self.rect = pygame.Rect(self.pos.x, self.pos.y - 4, 16, 8)  
+
+        # cargar imagen del láser - en caso de no querer usar un rect
+        self.image = load_image(ASSET_DIR/"animations/bullet/bala.png")
+        # ajustar rect según tamaño de la imagen
+        self.rect = self.image.get_rect(center=(x, y))
 
     def update(self, dt):
         dt_s = dt / 1000.0
@@ -304,8 +310,10 @@ class Laser:
             self.active = False
 
     def draw(self, surf, camera):
-        scr_rect = pygame.Rect(self.rect.x - camera.rect.x, self.rect.y - camera.rect.y, self.rect.w, self.rect.h)
-        pygame.draw.rect(surf, (255, 0, 0), scr_rect)  # rojo
+    # calcular posición relativa a la cámara
+        screen_pos = (self.rect.x - camera.rect.x, self.rect.y - camera.rect.y)
+        surf.blit(self.image, screen_pos)
+
 
 class Enemy:
     def __init__(self, x, y, w=32, h=32, speed=100, frames=None):
@@ -436,6 +444,10 @@ class Game:
             "Mapa1": ASSET_DIR/"map1.png",
             "Mapa2": ASSET_DIR/"map2.png"
            }   # fondos por mapa 
+        self.map_music = {
+            "Mapa1": MEDIA_DIR/"music/map1.mp3",
+            "Mapa2": MEDIA_DIR/"music/map2.mp3"
+        }
         self.current_map_index = 0      # índice del mapa actual
         self.world_completed = False
         self.level_transition_timer = 0.0  # tiempo que mostramos mensaje "Completado"
@@ -469,12 +481,21 @@ class Game:
         self.world_completed = False
 
         # assets UI/menu
-        self.menu_bg = load_image(ASSET_DIR/"prueba_fondo.png", convert_alpha=False)
+        self.menu_bg = load_image(ASSET_DIR/"portada.jpeg", convert_alpha=False)
         self.music_menu = self._load_music_safe(MEDIA_DIR/"music"/"menu.mp3")
         self.sound_jump = load_sound(MEDIA_DIR/"audio"/"salto.mp3")
         self.sound_move = load_sound(MEDIA_DIR/"audio"/"movimiento.mp3")
-        self.sound_move.set_volume(0.3) # Volumen más bajo para el movimiento
+        self.sound_attack = load_sound(MEDIA_DIR/"audio"/"ataque.mp3")
+        self.sound_explosion = load_sound(MEDIA_DIR/"audio"/"explosion.mp3")        
+        self.sound_move.set_volume(0.1) # Volumen más bajo para el movimiento
+        self.sound_jump.set_volume(0.8) # Volumen medio para el salto
+        self.sound_attack.set_volume(0.3) # Volumen medio para el ataque
+        self.sound_explosion.set_volume(0.7) # Volumen más alto para la explosión
+        # canales de sonido dedicados
         self.move_channel = pygame.mixer.Channel(1)
+        self.jump_channel = pygame.mixer.Channel(2)
+        self.explosion_channel = pygame.mixer.Channel(3)
+        self.attack_channel = pygame.mixer.Channel(4)
         if self.music_menu:
             pygame.mixer.music.load(str(self.music_menu))
             pygame.mixer.music.play(-1)
@@ -517,6 +538,17 @@ class Game:
             self.bg_image = load_image(bg_file, convert_alpha=False)
         else:
             self.bg_image = None
+
+        # cargar música específica del mapa
+        music_file = self.map_music.get(map_path.stem)
+        if music_file and music_file.exists():
+            try:
+                pygame.mixer.music.load(str(music_file))
+                pygame.mixer.music.play(-1)
+            except Exception as e:
+                print(f"No se pudo reproducir música para {map_path.stem}: {e}")
+        else:
+            pygame.mixer.music.stop()  # si no hay música, parar
 
 
     def _load_music_safe(self, p):
@@ -665,6 +697,7 @@ class Game:
                             if self.menu_options[self.menu_idx] == "INICIAR":
                                 self.state = "playing"
                                 pygame.mixer.music.stop()
+                                self._load_map(self.maps[self.current_map_index])
                             elif self.menu_options[self.menu_idx] == "SALIR":
                                 running = False
                     else:
@@ -700,10 +733,10 @@ class Game:
         if self.menu_bg:
             screen.blit(pygame.transform.scale(self.menu_bg, (WIDTH, HEIGHT)), (0,0))
         # dibujar opciones
-        title_surf = FONT.render("MI JUEGO", True, (255,255,255))
+        title_surf = FONT.render("RUSTWALKER", True, (0,255,0))
         screen.blit(title_surf, (WIDTH//2 - title_surf.get_width()//2, 80))
         for i, opt in enumerate(self.menu_options):
-            col = (255,255,0) if i == self.menu_idx else (255,255,255)
+            col = (255,255,0) if i == self.menu_idx else (0,255,0)
             txt = FONT.render(opt, True, col)
             screen.blit(txt, (WIDTH//2 - txt.get_width()//2, 240 + i*40))
 
@@ -727,6 +760,7 @@ class Game:
             self.player.is_attacking = True
             self.player.frame_idx = 0.0
             self.player.attack_delay_timer = self.player.attack_delay  # 0.5 s
+            self.attack_channel.play(self.sound_attack)
 
         # manejar delay de ataque
         if self.player.attack_requested:
@@ -754,6 +788,7 @@ class Game:
                 if not e.dead and laser.rect.colliderect(e.rect):
                     e.hp -= 1
                     e.dead = (e.hp <= 0)
+                    self.explosion_channel.play(self.sound_explosion)  # sonido de explosión
                     
                     # crear explosión en el centro del enemigo
                     explosion = Explosion(e.rect.centerx, e.rect.centery, self.explosion_frames)
