@@ -1,32 +1,42 @@
-Juego de Plataforma 2D en Pygame
+HOW TO INSTALL
+  
+1. Descarga el proyecto desde GitHub usando:
 
-Juego de prueba estilo plataformero 2D con pixel art, desarrollado en Python usando Pygame.
-Actualmente incluye movimiento del jugador, salto, gravedad, colisiones básicas y cámara centrada.
+git clone https://github.com/tu_usuario/tu_repositorio.git
 
-CARACTERISTICAS ACTUALES
+Luego ingresa a la carpeta del proyecto:
 
-- Movimiento horizontal y salto con gravedad.
+cd {ubicación de la clonación}
 
-- Colisiones con plataformas (solo se detecta la parte superior).
+2. Crear un entorno virtual (opcional, recomendado)
 
-- Reinicio automático al caer fuera de la pantalla.
+Esto evita conflictos con otras bibliotecas de Python que tengas instaladas:
 
-- Cámara centrada en el jugador.
+python -m venv venv
 
-- Menú inicial con fondo (sin funcionalidad de música por ahora).
+Activa el entorno virtual:
 
-PRÓXIMOS PASOS
+En Windows:
 
-- Integrar mapas de Tiled con múltiples plataformas y colisiones.
+venv\Scripts\activate
 
-- Añadir música y efectos de sonido.
+En Linux/macOS:
 
-- Mejorar la animación del personaje.
+source venv/bin/activate
 
-- Implementar pantalla completa y escalado.
+3. Instalar las dependencias
 
-NOTAS
+El juego necesita las bibliotecas pygame y pytmx. Instálalas usando:
 
-Actualmente la música está deshabilitada para evitar problemas en computadoras sin audio.
+pip install -r requirements.txt
 
-La lógica de colisiones solo detecta el contacto desde arriba, evitando que el jugador “suba” por los lados de los rectángulos.
+Esto descargará automáticamente todas las dependencias necesarias.
+
+4. Ejecutar el juego
+
+Una vez instaladas las bibliotecas, ejecuta el juego con:
+
+python main.py
+
+
+Nota: Asegúrate de que Python esté instalado en tu sistema y que sea compatible con las bibliotecas usadas (Python 3.8 o superior recomendado).
