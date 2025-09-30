@@ -6,7 +6,7 @@ from pathlib import Path
 # Configuración básica
 # -----------------------
 pygame.mixer.pre_init(44100, -16, 2, 512)
-pygame.init()
+pygame.init()   
 pygame.mixer.init()
 pygame.mixer.music.set_volume(0.1)  # volumen música
 WIDTH, HEIGHT = 1024, 768
@@ -17,6 +17,9 @@ FONT = pygame.font.SysFont("dejavusans", 40)
 
 ASSET_DIR = Path("assets")
 MEDIA_DIR = Path("media")
+
+icon_img = pygame.image.load(str(ASSET_DIR/"logo.webp"))
+pygame.display.set_icon(icon_img)
 
 # DEBUG visual (pon True para ver si on_ground se está calculando)
 DEBUG = False
