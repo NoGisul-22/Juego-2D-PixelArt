@@ -10,7 +10,7 @@ pygame.init()
 pygame.mixer.init()
 WIDTH, HEIGHT = 1024, 768
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Juego - MUNDO 1-1")
+pygame.display.set_caption("Juego - MUNDO 1")
 clock = pygame.time.Clock()
 FONT = pygame.font.SysFont("dejavusans", 20)
 
@@ -406,15 +406,19 @@ def is_on_ground(player, collision_rects):
 # Motor del juego
 # -----------------------
 class Game:
-    def __init__(self, map_path):
+    def __init__(self, map_paths):
+        self.maps = map_paths           # lista de rutas TMX
+        self.map_backgrounds = {
+            "Mapa1": ASSET_DIR/"map1.png",
+            "Mapa2": ASSET_DIR/"map2.png"
+           }   # fondos por mapa 
+        self.current_map_index = 0      # índice del mapa actual
+        self.world_completed = False
+        self.level_transition_timer = 0.0  # tiempo que mostramos mensaje "Completado"
         # estados
         self.state = "menu"  # "menu" o "playing"
-        # cargar mapa Tiled
-        self.tmx = pytmx.util_pygame.load_pygame(map_path)
-        self.world_w = self.tmx.width * self.tmx.tilewidth
-        self.world_h = self.tmx.height * self.tmx.tileheight
-        self.world_surf = pygame.Surface((self.world_w, self.world_h)).convert_alpha()
-        self.collision_rects = self._load_collision_rects()
+        # cargar primer mapa
+        self._load_map(self.maps[self.current_map_index])
         # spawn
         sp = self._find_object_by_name("player")
         sx, sy = (sp.x, sp.y) if sp else (100, 100)
@@ -428,12 +432,11 @@ class Game:
         self.enemies = []
         self._load_enemies_from_tiled()
         # hud / mundo
-        self.world_name = "MUNDO 1-1"
+        self.world_name = "MUNDO 1"
         self.world_completed = False
 
         # assets UI/menu
         self.menu_bg = load_image(ASSET_DIR/"prueba_fondo.png", convert_alpha=False)
-        self.bg_image = load_image(ASSET_DIR/"map2.png", convert_alpha=False)
         self.music_menu = self._load_music_safe(MEDIA_DIR/"music"/"menu.mp3")
         self.sound_jump = load_sound(MEDIA_DIR/"audio"/"salto.mp3")
         self.sound_move = load_sound(MEDIA_DIR/"audio"/"movimiento.mp3")
@@ -449,6 +452,39 @@ class Game:
         # menu cursor
         self.menu_options = ["INICIAR", "SALIR"]
         self.menu_idx = 0
+
+    def _load_map(self, map_path):
+        self.tmx = pytmx.util_pygame.load_pygame(map_path)
+        self.world_w = self.tmx.width * self.tmx.tilewidth
+        self.world_h = self.tmx.height * self.tmx.tileheight
+        self.collision_rects = self._load_collision_rects()
+
+        # spawn jugador
+        sp = self._find_object_by_name("player")
+        sx, sy = (sp.x, sp.y) if sp else (100, 100)
+        if hasattr(self, "player"):
+            self.player.reset()
+            self.player.start_pos = (sx, sy)
+        else:
+            self.player = Player(sx, sy)
+
+        # cámara
+        self.camera = Camera(self.world_w, self.world_h, WIDTH, HEIGHT, zoom=1)
+
+        # enemigos
+        self.enemies = []
+        self._load_enemies_from_tiled()
+
+        # HUD
+        self.world_name = f"MUNDO {self.current_map_index + 1}"
+
+        # asignar fondo automáticamente según diccionario
+        bg_file = self.map_backgrounds.get(map_path.stem)
+        if bg_file:
+            self.bg_image = load_image(bg_file, convert_alpha=False)
+        else:
+            self.bg_image = None
+
 
     def _load_music_safe(self, p):
         try:
@@ -603,8 +639,9 @@ class Game:
                         if event.key == pygame.K_n:
                             # marcar mundo completado (ejemplo)
                             self.world_completed = True
+                            self.level_transition_timer = 2.0  # segundos para transición
                         if event.key == pygame.K_ESCAPE:
-                            self.state = "menu"
+                            self.reset_to_menu()
                             if self.music_menu:
                                 pygame.mixer.music.load(self.music_menu)
                                 pygame.mixer.music.play(-1)
@@ -649,9 +686,7 @@ class Game:
             if self.move_channel:
                 self.move_channel.stop()
 
-
-        # ataques
-        # 1️⃣ detectar la pulsación de Z
+        # detectar la pulsación de Z
         attack_rect = None
         if keys[pygame.K_z] and self.player.attack_ready() and not self.player.attack_requested:
             self.player.attack_requested = True
@@ -660,7 +695,7 @@ class Game:
             self.player.frame_idx = 0.0
             self.player.attack_delay_timer = self.player.attack_delay  # 0.5 s
 
-        # 2️⃣ manejar delay de ataque
+        # manejar delay de ataque
         if self.player.attack_requested:
             self.player.attack_delay_timer -= dt / 1000.0
             if self.player.attack_delay_timer <= 0:
@@ -672,7 +707,7 @@ class Game:
                     x=self.player.rect.centerx - 10,
                     y=self.player.rect.centery + 20,
                     direction=self.player.direction,
-                    speed=300,
+                    speed=500,
                     length=380
                 )
                 self.lasers.append(laser)
@@ -720,6 +755,20 @@ class Game:
 
         # guardar el attack_rect para dibujar en render
         self._attack_rect = attack_rect
+        if self.world_completed:
+            self.level_transition_timer -= dt / 1000.0
+            if self.level_transition_timer <= 0:
+                # pasar al siguiente mapa
+                self.current_map_index += 1
+                if self.current_map_index >= len(self.maps):
+                    # volver al menú
+                    self.reset_to_menu()
+                else:
+                    self._load_map(self.maps[self.current_map_index])
+                self.world_completed = False
+
+        # cargar mapa segun nivel actual
+
 
     def render_game(self):
         # limpiar pantalla
@@ -775,15 +824,40 @@ class Game:
             col = (0,255,0) if self.player.on_ground else (255,0,0)
             pygame.draw.circle(screen, col, (30, 30), 8)
 
+        if self.world_completed:
+            msg = FONT.render("¡MUNDO COMPLETADO!", True, (255, 255, 0))
+            screen.blit(msg, (WIDTH//2 - msg.get_width()//2, HEIGHT//2 - msg.get_height()//2))
+
+    def reset_to_menu(self):
+        self.state = "menu"
+        self.current_map_index = 0
+        self.world_completed = False
+        self.level_transition_timer = 0.0
+        # reiniciar jugador y enemigos del primer mapa
+        self._load_map(self.maps[self.current_map_index])
+        self.player.reset()
+        for e in self.enemies:
+            e.reset()
+        # música del menú
+        if self.music_menu:
+            pygame.mixer.music.load(self.music_menu)
+            pygame.mixer.music.play(-1)
+
+
+
 # -----------------------
 # Ejecutar
 # -----------------------
 if __name__ == "__main__":
-    mapfile = ASSET_DIR/"maps"/"Mapa2.tmx"
-    if not mapfile.exists():
-        print("No se encontró el mapa:", mapfile)
-        print("Coloca tu TMX en assets/maps/mundo1.tmx o ajusta la ruta en main.py")
+    mapfiles = [
+        ASSET_DIR/"maps"/"Mapa1.tmx",
+        ASSET_DIR/"maps"/"Mapa2.tmx",
+    ]
+    mapfiles = [m for m in mapfiles if m.exists()]
+    if not mapfiles:
+        print("No se encontraron mapas.")
         pygame.quit()
         sys.exit()
-    game = Game(str(mapfile))
+    
+    game = Game(mapfiles)
     game.run()
