@@ -369,6 +369,30 @@ class Enemy:
         screen_pos = (self.rect.x - camera.rect.x, self.rect.y - camera.rect.y)
         surf.blit(self.image, screen_pos)
 
+class Explosion:
+    def __init__(self, x, y, frames, frame_speed=12.0):
+        self.frames = frames
+        self.frame_idx = 0.0
+        self.frame_speed = frame_speed  # frames por segundo
+        self.image = self.frames[0] if self.frames else None
+        self.rect = self.image.get_rect(center=(x, y)) if self.image else pygame.Rect(x, y, 32, 32)
+        self.finished = False
+
+    def update(self, dt):
+        if self.finished: return
+        self.frame_idx += self.frame_speed * (dt / 1000.0)
+        idx = int(self.frame_idx)
+        if idx >= len(self.frames):
+            self.finished = True
+        else:
+            self.image = self.frames[idx]
+
+    def draw(self, surf, camera):
+        if self.finished: return
+        screen_pos = (self.rect.x - camera.rect.x, self.rect.y - camera.rect.y)
+        surf.blit(self.image, screen_pos)
+
+
 class Dron(Enemy):
     def __init__(self, x, y):
         frames = [
@@ -428,6 +452,15 @@ class Game:
         self.camera = Camera(self.world_w, self.world_h, WIDTH, HEIGHT, zoom=1)
         # ataques
         self.lasers = []
+        # Cargar frames de explosión
+        self.explosion_frames = [
+            load_image(ASSET_DIR/"animations/explosion/explosion1.png"),
+            load_image(ASSET_DIR/"animations/explosion/explosion2.png"),
+            load_image(ASSET_DIR/"animations/explosion/explosion3.png"),
+            load_image(ASSET_DIR/"animations/explosion/explosion4.png"),
+            load_image(ASSET_DIR/"animations/explosion/explosion5.png"),
+        ]
+        self.explosions = []  # lista de explosiones activas    
         # cargar enemigos desde objetos
         self.enemies = []
         self._load_enemies_from_tiled()
@@ -717,13 +750,16 @@ class Game:
         # actualizar láseres
         for laser in self.lasers[:]:
             laser.update(dt)
-            # colisión con enemigos
             for e in self.enemies:
                 if not e.dead and laser.rect.colliderect(e.rect):
                     e.hp -= 1
                     e.dead = (e.hp <= 0)
-                    laser.active = False  # laser desaparece al impactar
-            # eliminar si inactivo
+                    
+                    # crear explosión en el centro del enemigo
+                    explosion = Explosion(e.rect.centerx, e.rect.centery, self.explosion_frames)
+                    self.explosions.append(explosion)
+
+                    laser.active = False  # el láser desaparece al impactar
             if not laser.active:
                 self.lasers.remove(laser)   
 
@@ -767,7 +803,11 @@ class Game:
                     self._load_map(self.maps[self.current_map_index])
                 self.world_completed = False
 
-        # cargar mapa segun nivel actual
+        for exp in self.explosions[:]:
+            exp.update(dt)
+            if exp.finished:
+                self.explosions.remove(exp)
+
 
 
     def render_game(self):
@@ -801,6 +841,11 @@ class Game:
          # dibujar láseres
         for laser in self.lasers:
             laser.draw(cam_surface, self.camera)
+
+        # dibujar explosiones
+        for exp in self.explosions:
+            exp.draw(cam_surface, self.camera)
+
 
         # escalar la cámara a la pantalla final
         screen.blit(pygame.transform.scale(cam_surface, (WIDTH, HEIGHT)), (0,0))
