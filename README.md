@@ -2,7 +2,7 @@ HOW TO INSTALL
   
 1. Descarga el proyecto desde GitHub usando:
 
-git clone https://github.com/tu_usuario/tu_repositorio.git
+git clone https://github.com/tu_usuario/tu_repositorio.git](https://github.com/NoGisul-22/Juego-2D-PixelArt/tree/main
 
 Luego ingresa a la carpeta del proyecto:
 
