@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="255" height="23" tilewidth="32" tileheight="32" infinite="0" nextlayerid="12" nextobjectid="74">
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="255" height="23" tilewidth="32" tileheight="32" infinite="0" nextlayerid="12" nextobjectid="75">
  <tileset firstgid="1" name="suelo" tilewidth="32" tileheight="32" spacing="1" margin="1" tilecount="16" columns="4">
   <image source="estructuras.png" width="133" height="138"/>
   <tile id="0">
@@ -122,8 +122,8 @@
   <object id="72" name="slime" type="enemy_spawn" x="415.5" y="493">
    <polyline points="0,0 511,0"/>
   </object>
-  <object id="73" name="dron" type="enemy_spawn" x="4242" y="448">
-   <polyline points="0,0 607.333,-0.666667"/>
+  <object id="74" name="slime" type="enemy_spawn" x="4224.5" y="463.5">
+   <polyline points="0,0 639,-1"/>
   </object>
  </objectgroup>
 </map>

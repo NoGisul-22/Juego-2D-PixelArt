@@ -106,29 +106,55 @@ class Player:
             load_image(ASSET_DIR/"animations/jump/jump3.png"),
             load_image(ASSET_DIR/"animations/jump/jump4.png"),
         ]
+        self.frames_attack = [
+            load_image(ASSET_DIR/"animations/attack/atack1.png"),
+            load_image(ASSET_DIR/"animations/attack/atack2.png"),
+            load_image(ASSET_DIR/"animations/attack/atack3.png"),
+            load_image(ASSET_DIR/"animations/attack/atack4.png"),
+            load_image(ASSET_DIR/"animations/attack/atack5.png"),
+            load_image(ASSET_DIR/"animations/attack/atack6.png"),
+            load_image(ASSET_DIR/"animations/attack/atack7.png"),
+            load_image(ASSET_DIR/"animations/attack/atack8.png"),
+            load_image(ASSET_DIR/"animations/attack/atack9.png"),
+            load_image(ASSET_DIR/"animations/attack/atack10.png"),
+            load_image(ASSET_DIR/"animations/attack/atack11.png"),
+        ]
 
         self.frame_idx = 0.0
         self.frame_speed = 8.0
 
         # ataque
-        self.attack_cooldown = 0.35
+        self.attack_cooldown = 1.5  # segundos entre ataques
         self.attack_timer = 0.0
+        self.is_attacking = False
+        self.attack_laser_fired = False  # para evitar disparar varias veces en la misma animación
+        self.attack_delay = 0.5  # segundos hasta que el láser se dispara en la animación
+        self.attack_delay_timer = 0.0
+        self.attack_requested = False
+
 
     def update(self, dt, keys, collision_rects):
         dt_s = dt / 1000.0
-        ax = (1 if keys[pygame.K_RIGHT] else 0) - (1 if keys[pygame.K_LEFT] else 0)
-        self.vel_x = ax * self.speed
-        if ax != 0:
-            self.direction = 1 if ax > 0 else -1
+        # solo moverse si NO está atacando
+        if not self.is_attacking:
+            ax = (1 if keys[pygame.K_RIGHT] else 0) - (1 if keys[pygame.K_LEFT] else 0)
+            self.vel_x = ax * self.speed
+            if ax != 0:
+                self.direction = 1 if ax > 0 else -1
+        else:
+            # bloqueo: no se mueve horizontalmente
+            self.vel_x = 0
+
 
         # salto (activar animación aquí SOLO cuando empieza)
-        if keys[pygame.K_SPACE] and self.on_ground:
+        if not self.is_attacking and keys[pygame.K_SPACE] and self.on_ground:
             self.vel_y = -self.jump_impulse
             self.on_ground = False
             self.is_jumping = True   # 🔹 ahora sí marcamos que está en salto
             self.frame_idx = 0.0     # reiniciar anim de salto
             if hasattr(self, 'sound_jump') and self.sound_jump:
                 self.sound_jump.play()
+
 
         #  gravedad
         self.vel_y += self.gravity * dt_s
@@ -152,6 +178,7 @@ class Player:
         # ---------------------
         # Animaciones
         # ---------------------
+
         if self.is_jumping:
             # animación de salto (frames 0-2 al inicio, frame 3 en el aire)
             if self.frame_idx < len(self.frames_jump) - 1:
@@ -178,6 +205,23 @@ class Player:
         # cooldown ataque
         if self.attack_timer > 0.0:
             self.attack_timer = max(0.0, self.attack_timer - dt_s)
+
+        # animación de ataque (tiene prioridad)
+        if self.is_attacking:
+            self.frame_idx += self.frame_speed * dt_s
+            idx = int(self.frame_idx)
+            if idx >= len(self.frames_attack):
+                # animación terminó
+                self.is_attacking = False
+                self.frame_idx = 0.0
+                self.image = self.frames_idle[0]
+            else:
+                img = self.frames_attack[idx]
+                # 🔹 flip solo si está mirando a la izquierda
+                if self.direction == -1:
+                    img = pygame.transform.flip(img, True, False)
+                self.image = img
+
 
     def _collide_axis(self, rects, axis, prev_bottom=None):
         """
@@ -237,6 +281,31 @@ class Player:
         self.on_ground = False
         self.attack_timer = 0.0
         self.frame_idx = 0.0
+
+class Laser:
+    def __init__(self, x, y, direction, speed=200, length=100):
+        self.pos = pygame.Vector2(x, y)
+        self.start_x = x            # <<< guardamos posición inicial
+        self.direction = direction  # 1 = derecha, -1 = izquierda
+        self.speed = speed          # px/s
+        self.length = length        # longitud máxima del láser
+        self.active = True
+        # Rect para colisión
+        self.rect = pygame.Rect(self.pos.x, self.pos.y - 4, 16, 8)  # ancho 16 px
+
+    def update(self, dt):
+        dt_s = dt / 1000.0
+        # avanzar en X
+        self.pos.x += self.speed * dt_s * self.direction
+        self.rect.x = int(self.pos.x)
+
+        # desactivar si ha recorrido más que su longitud
+        if abs(self.pos.x - self.start_x) > self.length:
+            self.active = False
+
+    def draw(self, surf, camera):
+        scr_rect = pygame.Rect(self.rect.x - camera.rect.x, self.rect.y - camera.rect.y, self.rect.w, self.rect.h)
+        pygame.draw.rect(surf, (255, 0, 0), scr_rect)  # rojo
 
 class Enemy:
     def __init__(self, x, y, w=32, h=32, speed=100, frames=None):
@@ -353,6 +422,8 @@ class Game:
         self.player.sound_jump = load_sound(MEDIA_DIR/"audio"/"salto.mp3")
         # camara
         self.camera = Camera(self.world_w, self.world_h, WIDTH, HEIGHT, zoom=1)
+        # ataques
+        self.lasers = []
         # cargar enemigos desde objetos
         self.enemies = []
         self._load_enemies_from_tiled()
@@ -362,7 +433,7 @@ class Game:
 
         # assets UI/menu
         self.menu_bg = load_image(ASSET_DIR/"prueba_fondo.png", convert_alpha=False)
-        self.bg_image = load_image(ASSET_DIR/"fondo_mapa1.jpeg", convert_alpha=False)
+        self.bg_image = load_image(ASSET_DIR/"map2.png", convert_alpha=False)
         self.music_menu = self._load_music_safe(MEDIA_DIR/"music"/"menu.mp3")
         self.sound_jump = load_sound(MEDIA_DIR/"audio"/"salto.mp3")
         self.sound_move = load_sound(MEDIA_DIR/"audio"/"movimiento.mp3")
@@ -580,19 +651,48 @@ class Game:
 
 
         # ataques
+        # 1️⃣ detectar la pulsación de Z
         attack_rect = None
-        if keys[pygame.K_z] and self.player.attack_ready():
-            # crear rect delante del jugador
-            w = 60; h = self.player.rect.height//2
-            if self.player.direction == 1:
-                ax = self.player.rect.right
-            else:
-                ax = self.player.rect.left - w
-            ay = self.player.rect.centery - h//2
-            attack_rect = pygame.Rect(ax, ay, w, h)
+        if keys[pygame.K_z] and self.player.attack_ready() and not self.player.attack_requested:
+            self.player.attack_requested = True
             self.player.do_attack()
+            self.player.is_attacking = True
+            self.player.frame_idx = 0.0
+            self.player.attack_delay_timer = self.player.attack_delay  # 0.5 s
 
-        # actualizar enemigos y chequear colisiones con ataque
+        # 2️⃣ manejar delay de ataque
+        if self.player.attack_requested:
+            self.player.attack_delay_timer -= dt / 1000.0
+            if self.player.attack_delay_timer <= 0:
+                # ataque listo, disparar láser
+                self.player.attack_requested = False  # reset
+
+                # crear el láser
+                laser = Laser(
+                    x=self.player.rect.centerx - 10,
+                    y=self.player.rect.centery + 20,
+                    direction=self.player.direction,
+                    speed=300,
+                    length=380
+                )
+                self.lasers.append(laser)
+
+
+
+        # actualizar láseres
+        for laser in self.lasers[:]:
+            laser.update(dt)
+            # colisión con enemigos
+            for e in self.enemies:
+                if not e.dead and laser.rect.colliderect(e.rect):
+                    e.hp -= 1
+                    e.dead = (e.hp <= 0)
+                    laser.active = False  # laser desaparece al impactar
+            # eliminar si inactivo
+            if not laser.active:
+                self.lasers.remove(laser)   
+
+        # colisiones con enemigos
         for e in self.enemies:
             e.update(dt)
             if attack_rect and not e.dead:
@@ -647,7 +747,11 @@ class Game:
         # dibujar jugador
         px = self.player.rect.x - self.camera.rect.x
         py = self.player.rect.y - self.camera.rect.y
-        cam_surface.blit(self.player.image, (px, py))
+        cam_surface.blit(self.player.image, (px, py)) 
+         
+         # dibujar láseres
+        for laser in self.lasers:
+            laser.draw(cam_surface, self.camera)
 
         # escalar la cámara a la pantalla final
         screen.blit(pygame.transform.scale(cam_surface, (WIDTH, HEIGHT)), (0,0))
@@ -675,7 +779,7 @@ class Game:
 # Ejecutar
 # -----------------------
 if __name__ == "__main__":
-    mapfile = ASSET_DIR/"maps"/"mundo1_mod.tmx"
+    mapfile = ASSET_DIR/"maps"/"Mapa2.tmx"
     if not mapfile.exists():
         print("No se encontró el mapa:", mapfile)
         print("Coloca tu TMX en assets/maps/mundo1.tmx o ajusta la ruta en main.py")
